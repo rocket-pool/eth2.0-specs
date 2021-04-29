@@ -5,7 +5,7 @@ from eth2spec.altair import spec as spec_altair
 from eth2spec.merge import spec as spec_merge
 from eth2spec.utils import bls
 
-from .exceptions import SkippedTest
+from .exceptions import SkippedTest, ValidationError
 from .helpers.constants import (
     PHASE0, ALTAIR, MERGE,
     ALL_PHASES, FORKS_BEFORE_ALTAIR, FORKS_BEFORE_MERGE,
@@ -209,6 +209,8 @@ def expect_assertion_error(fn):
     try:
         fn()
         bad = True
+    except ValidationError:
+        pass
     except AssertionError:
         pass
     except IndexError:
