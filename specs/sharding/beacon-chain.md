@@ -378,7 +378,7 @@ def compute_proposer_index(beacon_state: BeaconState,
     """
     Return from ``indices`` a random index sampled by effective balance.
     """
-    assert len(indices) > 0
+    require(len(indices) > 0)
     MAX_RANDOM_BYTE = 2**8 - 1
     i = uint64(0)
     total = uint64(len(indices))
@@ -474,7 +474,7 @@ def process_block(state: BeaconState, block: BeaconBlock) -> None:
 ```python
 def process_operations(state: BeaconState, body: BeaconBlockBody) -> None:
     # Verify that outstanding deposits are processed up to the maximum number of deposits
-    assert len(body.deposits) == min(MAX_DEPOSITS, state.eth1_data.deposit_count - state.eth1_deposit_index)
+    require(len(body.deposits) == min(MAX_DEPOSITS, state.eth1_data.deposit_count - state.eth1_deposit_index))
 
     def for_ops(operations: Sequence[Any], fn: Callable[[BeaconState, Any], None]) -> None:
         for operation in operations:
@@ -485,7 +485,8 @@ def process_operations(state: BeaconState, body: BeaconBlockBody) -> None:
     # New shard proposer slashing processing
     for_ops(body.shard_proposer_slashings, process_shard_proposer_slashing)
     # Limit is dynamic based on active shard count
-    assert len(body.shard_headers) <= MAX_SHARD_HEADERS_PER_SHARD * get_active_shard_count(state, get_current_epoch(state))
+    active_shard_count = get_active_shard_count(state, get_current_epoch(state))
+    require(len(body.shard_headers) <= MAX_SHARD_HEADERS_PER_SHARD * active_shard_count)
     for_ops(body.shard_headers, process_shard_header)
     # New attestation processing
     for_ops(body.attestations, process_attestation)
@@ -526,7 +527,7 @@ def update_pending_votes(state: BeaconState, attestation: Attestation) -> None:
             and header.shard == attestation_shard
         ):
             pending_header = header
-    assert pending_header is not None
+    require(pending_header is not None)
 
     for i in range(len(pending_header.votes)):
         pending_header.votes[i] = pending_header.votes[i] or attestation.aggregation_bits[i]
@@ -555,30 +556,28 @@ def update_pending_votes(state: BeaconState, attestation: Attestation) -> None:
 def process_shard_header(state: BeaconState,
                          signed_header: SignedShardBlobHeader) -> None:
     header = signed_header.message
-    # Verify the header is not 0, and not from the future.
-    assert Slot(0) < header.slot <= state.slot
+    require(Slot(0) < header.slot <= state.slot, 'The header should not be at slot 0, and should not from the future.')
     header_epoch = compute_epoch_at_slot(header.slot)
-    # Verify that the header is within the processing time window
-    assert header_epoch in [get_previous_epoch(state), get_current_epoch(state)]
-    # Verify that the shard is active
-    assert header.shard < get_active_shard_count(state, header_epoch)
-    # Verify that the block root matches,
-    # to ensure the header will only be included in this specific Beacon Chain sub-tree.
-    assert header.body_summary.beacon_block_root == get_block_root_at_slot(state, header.slot - 1)
-    # Verify proposer
-    assert header.proposer_index == get_shard_proposer_index(state, header.slot, header.shard)
-    # Verify signature
+    require(header_epoch in [get_previous_epoch(state), get_current_epoch(state)],
+            'The header should be within the processing time window.')
+    require(header.shard < get_active_shard_count(state, header_epoch), '`header.shard` should be active')
+    require(header.body_summary.beacon_block_root == get_block_root_at_slot(state, header.slot - 1),
+            'The the block root matches,'
+            'to ensure the header will only be included in this specific Beacon Chain sub-tree.')
+    require(header.proposer_index == get_shard_proposer_index(state, header.slot, header.shard),
+            'The header.proposer_index should be valid.')
     signing_root = compute_signing_root(header, get_domain(state, DOMAIN_SHARD_PROPOSER))
-    assert bls.Verify(state.validators[header.proposer_index].pubkey, signing_root, signed_header.signature)
+    require(bls.Verify(state.validators[header.proposer_index].pubkey, signing_root, signed_header.signature),
+            'The signature should be valid.')
 
     # Verify the length by verifying the degree.
     body_summary = header.body_summary
     if body_summary.commitment.length == 0:
-        assert body_summary.degree_proof == G1_SETUP[0]
-    assert (
+        require(body_summary.degree_proof == G1_SETUP[0])
+    require((
         bls.Pairing(body_summary.degree_proof, G2_SETUP[0])
         == bls.Pairing(body_summary.commitment.point, G2_SETUP[-body_summary.commitment.length])
-    )
+    ))
 
     # Get the correct pending header list
     if header_epoch == get_current_epoch(state):
@@ -587,8 +586,8 @@ def process_shard_header(state: BeaconState,
         pending_headers = state.previous_epoch_pending_shard_headers
 
     header_root = hash_tree_root(header)
-    # Check that this header is not yet in the pending list
-    assert header_root not in [pending_header.root for pending_header in pending_headers]
+    require(header_root not in [pending_header.root for pending_header in pending_headers],
+            'The given header should not yet in the pending list.')
 
     # Include it in the pending list
     index = compute_committee_index_from_shard(state, header.slot, header.shard)
@@ -615,22 +614,16 @@ def process_shard_proposer_slashing(state: BeaconState, proposer_slashing: Shard
     reference_1 = proposer_slashing.signed_reference_1.message
     reference_2 = proposer_slashing.signed_reference_2.message
 
-    # Verify header slots match
-    assert reference_1.slot == reference_2.slot
-    # Verify header shards match
-    assert reference_1.shard == reference_2.shard
-    # Verify header proposer indices match
-    assert reference_1.proposer_index == reference_2.proposer_index
-    # Verify the headers are different (i.e. different body)
-    assert reference_1 != reference_2
-    # Verify the proposer is slashable
+    require(reference_1.slot == reference_2.slot, 'The header slots should match.')
+    require(reference_1.shard == reference_2.shard, 'The header shards should match.')
+    require(reference_1.proposer_index == reference_2.proposer_index, 'The header proposer indices should match')
+    require(reference_1 != reference_2, 'The headers should be different (i.e. different body).')
     proposer = state.validators[reference_1.proposer_index]
-    assert is_slashable_validator(proposer, get_current_epoch(state))
-    # Verify signatures
+    require(is_slashable_validator(proposer, get_current_epoch(state)), 'The proposer should be slashable')
     for signed_header in (proposer_slashing.signed_reference_1, proposer_slashing.signed_reference_2):
         domain = get_domain(state, DOMAIN_SHARD_PROPOSER, compute_epoch_at_slot(signed_header.message.slot))
         signing_root = compute_signing_root(signed_header.message, domain)
-        assert bls.Verify(proposer.pubkey, signing_root, signed_header.signature)
+        require(bls.Verify(proposer.pubkey, signing_root, signed_header.signature), 'The signature should be valid.')
 
     slash_validator(state, reference_1.proposer_index)
 ```
